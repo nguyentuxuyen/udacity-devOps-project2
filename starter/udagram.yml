@@ -1,18 +1,194 @@
 Description: CD12352 - Infrastructure as Code Project - Udagram
 
 Parameters:
-  # Add your parameters here
+  ProjectName:
+    Type: String
+    Description: Project name
+  ImageId:
+    Type: String
+    Description: AMI for instance image
+    Default: ami-07caf09b362be10b8
+  InstanceType:
+    Type: String
+    Description: Instance Type
+    Default: t2.micro
+  S3BucketName:
+    Type: String
+    Description: Bucket Name
+  MyIP:
+    Type: String
+    Description: My IP Address
+    Default: 0.0.0.0/0
 
 Resources:
-  # Add your resources here
-  # We include a portion of the LaunchTemplate resource so you can use the UserData.
+  LBSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http access to our load balancer
+      VpcId:
+        Fn::ImportValue:
+          !Sub ${ProjectName}-vpc-id
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      Tags:
+      - Key: Name
+        Value: !Sub ${ProjectName}-loadbalancer-security-group
+  
+  WebServerSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http access to our hosts from the LB Security Group
+      VpcId:
+        Fn::ImportValue:
+          !Sub ${ProjectName}-vpc-id
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        SourceSecurityGroupId: !Ref LBSecGroup
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 0
+        ToPort: 65535
+        CidrIp: 0.0.0.0/0
+      Tags:
+      - Key: Name
+        Value: !Sub ${ProjectName}-webserver-security-group
+  
+  WebAppInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-web-servers
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub ${ProjectName}-S3ReadOnlyAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+            - Effect: Allow
+              Action:
+              - s3:GetObject
+              Resource: !Sub 'arn:aws:s3:::${S3BucketName}/*'
+  
+  WebAppInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: '/'
+      Roles:
+      - Ref: WebAppInstanceRole
+
   WebAppLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
-    Properties: 
+    Properties:
+      LaunchTemplateName: !Sub ${ProjectName}-web-app-launch-template
       LaunchTemplateData:
+        ImageId: !Ref ImageId
+        InstanceType: !Ref InstanceType
         UserData:
-          Fn::Base64: |
+          Fn::Base64: !Sub
+          - |
             #!/bin/bash
             apt-get update -y
-            sudo apt-get install nginx -y
+            sudo apt-get install awscli nginx -y
             service nginx start
+
+            cd /var/www/html/
+            sudo mkdir udagram
+            cd udagram
+            sudo aws s3 cp s3://${S3BucketName}/index.html .
+          - {
+              S3BucketName: !Ref S3BucketName
+            }
+        SecurityGroupIds:
+          - !Ref WebServerSecGroup
+        BlockDeviceMappings:
+        - DeviceName: '/dev/sdk'
+          Ebs:
+            VolumeSize: 10
+        IamInstanceProfile:
+          Name: !Ref WebAppInstanceProfile
+  
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+      - Fn::ImportValue: !Sub ${ProjectName}-private-subnet1
+      - Fn::ImportValue: !Sub ${ProjectName}-private-subnet2
+      LaunchTemplate:
+        LaunchTemplateId: !Ref WebAppLaunchTemplate
+        Version: !GetAtt WebAppLaunchTemplate.LatestVersionNumber
+      MinSize: 2
+      DesiredCapacity: 2
+      MaxSize: 6
+      TargetGroupARNs:
+      - !Ref TargetGroup
+    
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 10
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 8
+      HealthyThresholdCount: 3
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 5
+      VpcId:
+        Fn::ImportValue: !Sub ${ProjectName}-vpc-id
+  
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+      - Fn::ImportValue: !Sub ${ProjectName}-public-subnet1
+      - Fn::ImportValue: !Sub ${ProjectName}-public-subnet2
+      SecurityGroups:
+      - !Ref LBSecGroup
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref TargetGroup
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+  
+  ListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+      - Type: forward
+        TargetGroupArn: !Ref TargetGroup
+      Conditions:
+      - Field: path-pattern
+        Values: [/]
+      ListenerArn: !Ref Listener
+      Priority: 1
+
+Outputs:
+  WebAppLoadBalancerURL:
+    Description: "Load balancer URL within the http:// in front"
+    Value: !Sub 
+      - "http://${load_balancer_dns_name}"
+      - load_balancer_dns_name: !GetAtt LoadBalancer.DNSName
+    Export:
+      Name: !Sub ${ProjectName}-loadbalancer-dns

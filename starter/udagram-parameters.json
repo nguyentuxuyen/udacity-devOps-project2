@@ -1,6 +1,10 @@
 [
 	{
-		"ParameterKey": "Add you parameters here",
-		"ParameterValue": "Add you parameters here"
+		"ParameterKey": "ProjectName",
+		"ParameterValue": "xDevOpsUdagramP2"
+	},
+	{
+		"ParameterKey": "S3BucketName",
+		"ParameterValue": "xudadevopsp2"
 	}
 ]
