@@ -1,10 +1,18 @@
 [
 	{
 		"ParameterKey": "ProjectName",
-		"ParameterValue": "xDevOpsUdagramP2"
+		"ParameterValue": "UdagramP2"
 	},
 	{
-		"ParameterKey": "S3BucketName",
+		"ParameterKey": "AmiID",
+		"ParameterValue": "ami-0e001c9271cf7f3b9"
+	},
+	{
+		"ParameterKey": "InstanceType",
+		"ParameterValue": "t2.micro"
+	},
+	{
+		"ParameterKey": "S3Name",
 		"ParameterValue": "xudadevopsp2"
 	}
 ]

@@ -4,30 +4,26 @@ Parameters:
   ProjectName:
     Type: String
     Description: Project name
-  ImageId:
+  AmiID:
     Type: String
-    Description: AMI for instance image
-    Default: ami-07caf09b362be10b8
+    Description: AMI ID
   InstanceType:
     Type: String
     Description: Instance Type
-    Default: t2.micro
-  S3BucketName:
+  S3Name:
     Type: String
     Description: Bucket Name
-  MyIP:
-    Type: String
-    Description: My IP Address
-    Default: 0.0.0.0/0
 
 Resources:
-  LBSecGroup:
+  # Add your resources here
+  ## Create Load Balancer SecurityGroup
+  LBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow http access to our load balancer
+      GroupDescription: Http access to load balancer
       VpcId:
         Fn::ImportValue:
-          !Sub ${ProjectName}-vpc-id
+          !Sub ${ProjectName}-vpcid
       SecurityGroupIngress:
       - IpProtocol: tcp
         FromPort: 80
@@ -41,19 +37,20 @@ Resources:
       Tags:
       - Key: Name
         Value: !Sub ${ProjectName}-loadbalancer-security-group
-  
+
+  ## Create Web Server SecurityGroup
   WebServerSecGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow http access to our hosts from the LB Security Group
+      GroupDescription: Http access to hosts from the LB Security Group
       VpcId:
         Fn::ImportValue:
-          !Sub ${ProjectName}-vpc-id
+          !Sub ${ProjectName}-vpcid
       SecurityGroupIngress:
       - IpProtocol: tcp
         FromPort: 80
         ToPort: 80
-        SourceSecurityGroupId: !Ref LBSecGroup
+        SourceSecurityGroupId: !Ref LBSecurityGroup
       SecurityGroupEgress:
       - IpProtocol: tcp
         FromPort: 0
@@ -62,11 +59,12 @@ Resources:
       Tags:
       - Key: Name
         Value: !Sub ${ProjectName}-webserver-security-group
-  
-  WebAppInstanceRole:
+
+  ## Create Web Server Instance Role
+  InstanceRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub ${ProjectName}-web-servers
+      RoleName: !Sub ${ProjectName}-instance-role
       AssumeRolePolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -77,28 +75,29 @@ Resources:
           Action:
           - sts:AssumeRole
       Policies:
-        - PolicyName: !Sub ${ProjectName}-S3ReadOnlyAccess
+        - PolicyName: !Sub ${ProjectName}-S3ReadOnly
           PolicyDocument:
             Version: 2012-10-17
             Statement:
             - Effect: Allow
               Action:
               - s3:GetObject
-              Resource: !Sub 'arn:aws:s3:::${S3BucketName}/*'
-  
-  WebAppInstanceProfile:
+              Resource: !Sub 'arn:aws:s3:::${S3Name}/*'
+
+  InstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
       Path: '/'
       Roles:
-      - Ref: WebAppInstanceRole
+      - Ref: InstanceRole
 
+  # We include a portion of the LaunchTemplate resource so you can use the UserData.
   WebAppLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
-    Properties:
-      LaunchTemplateName: !Sub ${ProjectName}-web-app-launch-template
+    Properties: 
+      LaunchTemplateName: !Sub ${ProjectName}-template
       LaunchTemplateData:
-        ImageId: !Ref ImageId
+        ImageId: !Ref AmiID
         InstanceType: !Ref InstanceType
         UserData:
           Fn::Base64: !Sub
@@ -111,9 +110,9 @@ Resources:
             cd /var/www/html/
             sudo mkdir udagram
             cd udagram
-            sudo aws s3 cp s3://${S3BucketName}/index.html .
+            sudo aws s3 cp s3://${S3Name}/index.html .
           - {
-              S3BucketName: !Ref S3BucketName
+              S3Name: !Ref S3Name
             }
         SecurityGroupIds:
           - !Ref WebServerSecGroup
@@ -122,14 +121,14 @@ Resources:
           Ebs:
             VolumeSize: 10
         IamInstanceProfile:
-          Name: !Ref WebAppInstanceProfile
-  
+          Name: !Ref InstanceProfile
+
   AutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       VPCZoneIdentifier:
-      - Fn::ImportValue: !Sub ${ProjectName}-private-subnet1
-      - Fn::ImportValue: !Sub ${ProjectName}-private-subnet2
+      - Fn::ImportValue: !Sub ${ProjectName}-privateSubnet1
+      - Fn::ImportValue: !Sub ${ProjectName}-privateSubnet2
       LaunchTemplate:
         LaunchTemplateId: !Ref WebAppLaunchTemplate
         Version: !GetAtt WebAppLaunchTemplate.LatestVersionNumber
@@ -138,7 +137,7 @@ Resources:
       MaxSize: 6
       TargetGroupARNs:
       - !Ref TargetGroup
-    
+
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
@@ -151,16 +150,16 @@ Resources:
       Protocol: HTTP
       UnhealthyThresholdCount: 5
       VpcId:
-        Fn::ImportValue: !Sub ${ProjectName}-vpc-id
-  
+        Fn::ImportValue: !Sub ${ProjectName}-vpcid
+
   LoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
       Subnets:
-      - Fn::ImportValue: !Sub ${ProjectName}-public-subnet1
-      - Fn::ImportValue: !Sub ${ProjectName}-public-subnet2
+      - Fn::ImportValue: !Sub ${ProjectName}-publicSubnet1
+      - Fn::ImportValue: !Sub ${ProjectName}-publicSubnet2
       SecurityGroups:
-      - !Ref LBSecGroup
+      - !Ref LBSecurityGroup
 
   Listener:
     Type: AWS::ElasticLoadBalancingV2::Listener
@@ -171,7 +170,7 @@ Resources:
       LoadBalancerArn: !Ref LoadBalancer
       Port: 80
       Protocol: HTTP
-  
+
   ListenerRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
     Properties:
@@ -186,7 +185,7 @@ Resources:
 
 Outputs:
   WebAppLoadBalancerURL:
-    Description: "Load balancer URL within the http:// in front"
+    Description: "Load balancer URL"
     Value: !Sub 
       - "http://${load_balancer_dns_name}"
       - load_balancer_dns_name: !GetAtt LoadBalancer.DNSName
